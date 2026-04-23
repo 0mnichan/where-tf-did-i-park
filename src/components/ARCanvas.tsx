@@ -370,7 +370,7 @@ function drawDistanceText(
   ctx.shadowBlur = 8
   ctx.shadowColor = color
   // Position above the dot, clamped so it doesn't overlap the compass
-  const textY = Math.max(120, Math.min(baseY, H - circleRadius - 4) - circleRadius - 10)
+  const textY = Math.max(120, baseY - circleRadius - 10)
   ctx.fillText(`~${Math.round(distance)}m`, x, textY)
   ctx.restore()
 }
