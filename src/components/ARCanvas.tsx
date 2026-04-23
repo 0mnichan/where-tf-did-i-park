@@ -100,8 +100,8 @@ export default function ARCanvas({
         ctx.font = "12px 'Space Mono', monospace"
         ctx.textAlign = 'center'
         ctx.fillText('compass unavailable — rotate your phone slowly to scan', W / 2, 26)
-      } else if (Math.abs(normalizedOffset) < 30) {
-        const xPos = W / 2 + (normalizedOffset / 30) * (W / 2)
+      } else if (Math.abs(normalizedOffset) < 45) {
+        const xPos = W / 2 + (normalizedOffset / 45) * (W / 2)
         drawBeam(ctx, xPos, W, H, accentColor, accentGlow, circleRadius)
         drawDistanceText(ctx, xPos, H, distance, accentColor)
 
@@ -148,7 +148,7 @@ export default function ARCanvas({
         ctx.shadowBlur = 8
         ctx.shadowColor = accentGlow
         ctx.font = "14px 'Space Mono', monospace"
-        ctx.fillText(isLeft ? 'turn left' : 'turn right', arrowX, arrowY + 54)
+        ctx.fillText(`${isLeft ? '← turn left' : 'turn right →'} ${Math.round(Math.abs(normalizedOffset))}°`, arrowX, arrowY + 54)
         ctx.restore()
       }
     }

@@ -15,15 +15,15 @@ export function useOrientation(active = true) {
     available: false,
   })
   const smoothed = useRef<number | null>(null)
+  // Once we get a true-north fix, never fall back to relative alpha
+  const trueNorthAcquired = useRef(false)
 
   useEffect(() => {
     if (!active) return
 
-    function handler(e: DeviceOrientationEvent) {
-      const raw = e.alpha
-      const pitch = e.beta
-
-      if (raw === null) return
+    function process(raw: number, pitch: number | null, isTrueNorth: boolean) {
+      if (isTrueNorth) trueNorthAcquired.current = true
+      if (trueNorthAcquired.current && !isTrueNorth) return
 
       let newSmoothed: number
       if (smoothed.current === null) {
@@ -38,14 +38,36 @@ export function useOrientation(active = true) {
 
       setState({
         heading: raw,
-        pitch: pitch,
+        pitch,
         smoothedHeading: newSmoothed,
-        available: true,
+        available: trueNorthAcquired.current,
       })
     }
 
-    window.addEventListener('deviceorientation', handler as EventListener, true)
-    return () => window.removeEventListener('deviceorientation', handler as EventListener, true)
+    // Android: deviceorientationabsolute gives alpha as clockwise degrees from true north
+    function onAbsolute(e: DeviceOrientationEvent) {
+      if (e.alpha == null) return
+      process(e.alpha, e.beta, true)
+    }
+
+    // iOS: webkitCompassHeading is clockwise from true north
+    // Android fallback: relative alpha (not useful for compass, marks available=false)
+    function onRelative(e: DeviceOrientationEvent) {
+      const iosHeading = (e as any).webkitCompassHeading as number | undefined
+      if (iosHeading != null) {
+        process(iosHeading, e.beta, true)
+      } else {
+        process(e.alpha ?? 0, e.beta, false)
+      }
+    }
+
+    window.addEventListener('deviceorientationabsolute', onAbsolute as EventListener, true)
+    window.addEventListener('deviceorientation', onRelative as EventListener, true)
+
+    return () => {
+      window.removeEventListener('deviceorientationabsolute', onAbsolute as EventListener, true)
+      window.removeEventListener('deviceorientation', onRelative as EventListener, true)
+    }
   }, [active])
 
   return state
