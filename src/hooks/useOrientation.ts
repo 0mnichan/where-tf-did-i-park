@@ -44,10 +44,10 @@ export function useOrientation(active = true) {
       })
     }
 
-    // Android: deviceorientationabsolute gives alpha as clockwise degrees from true north
+    // Android: deviceorientationabsolute alpha increases counterclockwise — convert to CW
     function onAbsolute(e: DeviceOrientationEvent) {
       if (e.alpha == null) return
-      process(e.alpha, e.beta, true)
+      process((360 - e.alpha) % 360, e.beta, true)
     }
 
     // iOS: webkitCompassHeading is clockwise from true north
