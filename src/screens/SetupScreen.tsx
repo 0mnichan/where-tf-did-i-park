@@ -30,7 +30,8 @@ export default function SetupScreen({ user, onComplete }: SetupScreenProps) {
     })
     setLoading(false)
     if (err) {
-      setError('something went wrong, try again')
+      console.error('vehicle insert error:', err)
+      setError(err.message || 'something went wrong, try again')
       return
     }
     onComplete()

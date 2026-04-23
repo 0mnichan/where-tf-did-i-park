@@ -8,39 +8,6 @@ import HomeScreen from './screens/HomeScreen'
 import SaveScreen from './screens/SaveScreen'
 import FindScreen from './screens/FindScreen'
 
-function DesktopGuard({ children }: { children: React.ReactNode }) {
-  const [isDesktop, setIsDesktop] = useState(false)
-
-  useEffect(() => {
-    function check() {
-      setIsDesktop(window.innerWidth > 768 && !('ontouchstart' in window))
-    }
-    check()
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
-  }, [])
-
-  if (isDesktop) {
-    return (
-      <div className="min-h-screen bg-bg flex items-center justify-center px-6">
-        <div className="text-center max-w-sm">
-          <h1
-            className="text-[48px] text-[#f0f0f0] leading-none mb-2"
-            style={{ fontFamily: "'Bebas Neue', sans-serif" }}
-          >
-            oi
-          </h1>
-          <div className="h-[2px] bg-accent mb-6" />
-          <p className="font-mono text-muted text-sm leading-relaxed">
-            this is a mobile app. open it on your phone and add it to your home screen.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  return <>{children}</>
-}
 
 export default function App() {
   const [view, setView] = useState<View>('auth')
@@ -128,62 +95,60 @@ export default function App() {
   }
 
   return (
-    <DesktopGuard>
-      <div className="min-h-screen bg-bg overflow-x-hidden">
-        <AnimatePresence mode="wait">
-          {view === 'auth' && (
-            <AuthScreen key="auth" />
-          )}
+    <div className="min-h-screen bg-bg overflow-x-hidden">
+      <AnimatePresence mode="wait">
+        {view === 'auth' && (
+          <AuthScreen key="auth" />
+        )}
 
-          {view === 'setup' && user && (
-            <SetupScreen
-              key="setup"
-              user={user}
-              onComplete={() => {
-                if (user) loadUserData(user.id)
-              }}
-            />
-          )}
+        {view === 'setup' && user && (
+          <SetupScreen
+            key="setup"
+            user={user}
+            onComplete={() => {
+              if (user) loadUserData(user.id)
+            }}
+          />
+        )}
 
-          {view === 'home' && user && vehicle && (
-            <HomeScreen
-              key="home"
-              user={user}
-              vehicle={vehicle}
-              activeSpot={activeSpot}
-              onSave={() => setView('save')}
-              onFind={() => setView('find')}
-              onSpotCleared={() => setActiveSpot(null)}
-              onSignOut={() => {
-                setUser(null)
-                setVehicle(null)
-                setActiveSpot(null)
-                setView('auth')
-              }}
-            />
-          )}
+        {view === 'home' && user && vehicle && (
+          <HomeScreen
+            key="home"
+            user={user}
+            vehicle={vehicle}
+            activeSpot={activeSpot}
+            onSave={() => setView('save')}
+            onFind={() => setView('find')}
+            onSpotCleared={() => setActiveSpot(null)}
+            onSignOut={() => {
+              setUser(null)
+              setVehicle(null)
+              setActiveSpot(null)
+              setView('auth')
+            }}
+          />
+        )}
 
-          {view === 'save' && user && (
-            <SaveScreen
-              key="save"
-              user={user}
-              onBack={() => setView('home')}
-              onSaved={() => {
-                if (user) refreshSpot(user.id).then(() => setView('home'))
-              }}
-            />
-          )}
+        {view === 'save' && user && (
+          <SaveScreen
+            key="save"
+            user={user}
+            onBack={() => setView('home')}
+            onSaved={() => {
+              if (user) refreshSpot(user.id).then(() => setView('home'))
+            }}
+          />
+        )}
 
-          {view === 'find' && vehicle && activeSpot && (
-            <FindScreen
-              key="find"
-              vehicle={vehicle}
-              activeSpot={activeSpot}
-              onBack={() => setView('home')}
-            />
-          )}
-        </AnimatePresence>
-      </div>
-    </DesktopGuard>
+        {view === 'find' && vehicle && activeSpot && (
+          <FindScreen
+            key="find"
+            vehicle={vehicle}
+            activeSpot={activeSpot}
+            onBack={() => setView('home')}
+          />
+        )}
+      </AnimatePresence>
+    </div>
   )
 }
