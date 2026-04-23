@@ -83,7 +83,16 @@ export default function ARCanvas({
 
       const accentColor = isClose ? '#ffc832' : '#c8f542'
       const pulse = (Math.sin(Date.now() / (isClose ? 150 : 300)) + 1) / 2
-      const circleRadius = 9 + pulse * 9
+
+      // Perspective: far away → beacon base near horizon, close → base at screen bottom
+      const MAX_DIST = 200
+      const HORIZON_Y = H * 0.48
+      const normDist = Math.min(1, distance / MAX_DIST)
+      const beaconBaseY = Math.min(H - 8, HORIZON_Y + (H - HORIZON_Y) * (1 - Math.sqrt(normDist)))
+
+      // Scale visual size with proximity (full size within 30m, shrinks beyond)
+      const proximityScale = Math.min(1, Math.max(0.2, 30 / Math.max(distance, 1)))
+      const circleRadius = (7 + pulse * 8) * proximityScale
 
       // Always draw PUBG compass strip at top
       drawCompass(ctx, W, heading, bearing, accentColor, compassAvailable)
@@ -93,8 +102,8 @@ export default function ARCanvas({
         const xPos = compassAvailable
           ? W / 2 + (normalizedOffset / 45) * (W / 2)
           : W / 2
-        drawBeacon(ctx, xPos, H, accentColor, circleRadius)
-        drawDistanceText(ctx, xPos, H, distance, accentColor, circleRadius)
+        drawBeacon(ctx, xPos, H, beaconBaseY, accentColor, circleRadius, proximityScale, distance)
+        drawDistanceText(ctx, xPos, beaconBaseY, distance, accentColor, circleRadius)
 
         if (isClose) {
           ctx.save()
@@ -278,61 +287,68 @@ function drawBeacon(
   ctx: CanvasRenderingContext2D,
   x: number,
   H: number,
+  baseY: number,      // perspective-projected ground position
   color: string,
   circleRadius: number,
+  proximityScale: number,
+  distance: number,
 ) {
   ctx.save()
 
-  // Wide diffuse halo
+  // Wide diffuse halo — scales with proximity
   ctx.beginPath()
-  ctx.moveTo(x, H)
+  ctx.moveTo(x, baseY)
   ctx.lineTo(x, 0)
-  ctx.strokeStyle = hexToRgba(color, 0.07)
-  ctx.lineWidth = 38
+  ctx.strokeStyle = hexToRgba(color, 0.07 * proximityScale)
+  ctx.lineWidth = 38 * proximityScale
   ctx.stroke()
 
   // Mid halo
   ctx.beginPath()
-  ctx.moveTo(x, H)
+  ctx.moveTo(x, baseY)
   ctx.lineTo(x, 0)
-  ctx.strokeStyle = hexToRgba(color, 0.16)
-  ctx.lineWidth = 13
+  ctx.strokeStyle = hexToRgba(color, 0.16 * proximityScale)
+  ctx.lineWidth = 13 * proximityScale
   ctx.stroke()
 
-  // Main beam with gradient (bright at base, fades to top)
-  const grad = ctx.createLinearGradient(x, H, x, 0)
+  // Main beam — bright at base (baseY), fades toward sky
+  const grad = ctx.createLinearGradient(x, baseY, x, 0)
   grad.addColorStop(0, hexToRgba(color, 1))
-  grad.addColorStop(0.2, hexToRgba(color, 0.85))
+  grad.addColorStop(0.2, hexToRgba(color, 0.8 * proximityScale))
   grad.addColorStop(1, hexToRgba(color, 0))
-  ctx.shadowBlur = 30
+  ctx.shadowBlur = 28 * proximityScale
   ctx.shadowColor = color
   ctx.beginPath()
-  ctx.moveTo(x, H)
+  ctx.moveTo(x, baseY)
   ctx.lineTo(x, 0)
   ctx.strokeStyle = grad
-  ctx.lineWidth = 4
+  ctx.lineWidth = 4 * proximityScale
   ctx.stroke()
 
-  // Pokemon Go expanding rings at base
-  const t = Date.now() / 1000
-  for (let i = 0; i < 3; i++) {
-    const phase = (t * 0.75 + i * 0.333) % 1
-    const ringR = 8 + phase * 58
-    const alpha = (1 - phase) * 0.55
-    ctx.beginPath()
-    ctx.arc(x, H - 24, ringR, 0, Math.PI * 2)
-    ctx.strokeStyle = hexToRgba(color, alpha)
-    ctx.lineWidth = 2.5
-    ctx.shadowBlur = 12
-    ctx.shadowColor = color
-    ctx.stroke()
+  // Expanding rings — only render when close enough to see them
+  if (distance < 80) {
+    const t = Date.now() / 1000
+    const ringY = Math.min(baseY, H - 10)
+    for (let i = 0; i < 3; i++) {
+      const phase = (t * 0.75 + i * 0.333) % 1
+      const ringR = (6 + phase * 55) * proximityScale
+      const alpha = (1 - phase) * 0.6
+      ctx.beginPath()
+      ctx.arc(x, ringY, ringR, 0, Math.PI * 2)
+      ctx.strokeStyle = hexToRgba(color, alpha)
+      ctx.lineWidth = 2.5
+      ctx.shadowBlur = 10
+      ctx.shadowColor = color
+      ctx.stroke()
+    }
   }
 
-  // Core pulsing dot
-  ctx.shadowBlur = 24
+  // Core pulsing dot at ground point
+  const dotY = Math.min(baseY, H - circleRadius - 4)
+  ctx.shadowBlur = 22
   ctx.shadowColor = color
   ctx.beginPath()
-  ctx.arc(x, H - 24, circleRadius, 0, Math.PI * 2)
+  ctx.arc(x, dotY, circleRadius, 0, Math.PI * 2)
   ctx.fillStyle = color
   ctx.fill()
 
@@ -342,7 +358,7 @@ function drawBeacon(
 function drawDistanceText(
   ctx: CanvasRenderingContext2D,
   x: number,
-  H: number,
+  baseY: number,
   distance: number,
   color: string,
   circleRadius: number,
@@ -353,7 +369,9 @@ function drawDistanceText(
   ctx.font = "14px 'Space Mono', monospace"
   ctx.shadowBlur = 8
   ctx.shadowColor = color
-  ctx.fillText(`~${Math.round(distance)}m`, x, H - 24 - circleRadius - 16)
+  // Position above the dot, clamped so it doesn't overlap the compass
+  const textY = Math.max(120, Math.min(baseY, H - circleRadius - 4) - circleRadius - 10)
+  ctx.fillText(`~${Math.round(distance)}m`, x, textY)
   ctx.restore()
 }
 
