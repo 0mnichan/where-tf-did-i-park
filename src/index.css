@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #080808;
+  --surface: #111111;
+  --surface2: #1c1c1c;
+  --accent: #c8f542;
+  --accent2: #00d4ff;
+  --gold: #ffc832;
+  --danger: #ff3b30;
+  --text: #f0f0f0;
+  --muted: #4a4a4a;
+  --border: #1e1e1e;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input,
+textarea {
+  background: #111111;
+  border: 1px solid #2a2a2a;
+  border-radius: 0;
+  color: #f0f0f0;
+  font-family: 'Space Mono', monospace;
+  font-size: 16px;
+  padding: 16px;
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #4a4a4a;
+}
+
+button {
+  border-radius: 0;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.6;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.2s ease-in-out infinite;
+}
