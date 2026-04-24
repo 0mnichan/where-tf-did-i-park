@@ -4,7 +4,8 @@ import { ChevronLeft, X, Share2, Copy, Zap, ZapOff } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Rectangle, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { useGeolocation } from '../hooks/useGeolocation'
-import { haversineDistance } from '../utils/geo'
+import { useOrientation } from '../hooks/useOrientation'
+import { haversineDistance, calculateBearing } from '../utils/geo'
 import { headingToCardinal } from '../utils/geo'
 import { colorNameToHex } from '../utils/colorMap'
 import { encodeDIGIPIN, decodeDIGIPIN } from '../utils/digipin'
@@ -46,8 +47,96 @@ function vibrate(pattern: number | number[]) {
   try { navigator.vibrate(pattern) } catch { /* not supported */ }
 }
 
+// ── Compass widget ────────────────────────────────────────────────────────────
+// Green needle points toward the parking spot.
+// "N" label counter-rotates so it always points geographic north.
+// When compass hardware is unavailable, shows absolute bearing (matches the
+// north-up Leaflet map) and a tiny "MAP" label.
+function CompassWidget({
+  deviceHeading,
+  spotBearing,
+}: {
+  deviceHeading: number | null
+  spotBearing: number
+}) {
+  const hasCompass = deviceHeading !== null
+  // Relative: direction user needs to physically face/walk toward spot.
+  // Absolute fallback: raw bearing against north-up map.
+  const needleAngle = hasCompass
+    ? (spotBearing - deviceHeading! + 360) % 360
+    : spotBearing
+
+  const pivotStyle = (rotate: number): React.CSSProperties => ({
+    transformOrigin: '30px 30px',
+    transform: `rotate(${rotate}deg)`,
+    transition: 'transform 0.15s ease-out',
+  })
+
+  return (
+    <svg width="60" height="60" viewBox="0 0 60 60" aria-label="compass">
+      {/* Background */}
+      <circle cx="30" cy="30" r="29"
+        fill="rgba(0,0,0,0.72)"
+        stroke="rgba(255,255,255,0.13)"
+        strokeWidth="1.5"
+      />
+
+      {/* Cardinal tick marks (fixed to ring) */}
+      {([0, 90, 180, 270] as const).map(a => {
+        const rad = (a * Math.PI) / 180
+        return (
+          <line key={a}
+            x1={30 + 22 * Math.sin(rad)} y1={30 - 22 * Math.cos(rad)}
+            x2={30 + 27 * Math.sin(rad)} y2={30 - 27 * Math.cos(rad)}
+            stroke="rgba(255,255,255,0.22)" strokeWidth="1.5"
+          />
+        )
+      })}
+
+      {/* N label — counter-rotates with device heading so it stays pointing north */}
+      {hasCompass && (
+        <g style={pivotStyle(-deviceHeading!)}>
+          <text
+            x="30" y="9"
+            textAnchor="middle" dominantBaseline="middle"
+            fill="rgba(255,255,255,0.65)"
+            fontSize="7" fontWeight="bold"
+            fontFamily="Space Mono, monospace"
+          >N</text>
+        </g>
+      )}
+
+      {/* Direction needle to spot */}
+      <g style={pivotStyle(needleAngle)}>
+        {/* Tip half — bright accent, points toward spot */}
+        <polygon points="30,9 35,30 25,30"
+          fill="#c8f542"
+          style={{ filter: 'drop-shadow(0 0 3px rgba(200,245,66,0.7))' }}
+        />
+        {/* Tail half — dim */}
+        <polygon points="35,30 30,51 25,30" fill="rgba(200,245,66,0.18)" />
+      </g>
+
+      {/* Center pivot dot */}
+      <circle cx="30" cy="30" r="3" fill="white" opacity="0.9" />
+
+      {/* No-compass hint */}
+      {!hasCompass && (
+        <text
+          x="30" y="56"
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.28)"
+          fontSize="5.5"
+          fontFamily="Space Mono, monospace"
+        >MAP</text>
+      )}
+    </svg>
+  )
+}
+
 export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenProps) {
   const geo = useGeolocation()
+  const orientation = useOrientation()
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
   const hapticTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const distanceRef = useRef(0)
@@ -159,6 +248,8 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
     }
   }, [arrived, hapticsMuted])
 
+  const spotBearing = calculateBearing(currentLat, currentLng, activeSpot.lat, activeSpot.lng)
+
   const mapHeight = Math.round(window.innerHeight * 0.6)
   const spotPos: [number, number] = [activeSpot.lat, activeSpot.lng]
   const currentPos: [number, number] = [currentLat, currentLng]
@@ -251,15 +342,20 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
             className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-2 bg-black/60 active:scale-[0.97] transition-transform z-[1001]"
             style={{ color: hapticsMuted ? '#4a4a4a' : '#c8f542' }}
           >
-            {hapticsMuted
-              ? <ZapOff size={14} />
-              : <Zap size={14} />
-            }
+            {hapticsMuted ? <ZapOff size={14} /> : <Zap size={14} />}
             <span className="font-mono text-xs">
               {hapticsMuted ? 'resume haptics' : 'stop haptics'}
             </span>
           </button>
         )}
+
+        {/* Compass — guides toward the parking spot */}
+        <div className="absolute right-3 z-[1001]" style={{ top: hasGps ? 52 : 12 }}>
+          <CompassWidget
+            deviceHeading={orientation.smoothedHeading}
+            spotBearing={spotBearing}
+          />
+        </div>
 
         {/* GPS loading badge */}
         {geo.loading && (
