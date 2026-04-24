@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, X, Share2, Copy } from 'lucide-react'
+import { ChevronLeft, X, Share2, Copy, Zap, ZapOff } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Rectangle, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { useGeolocation } from '../hooks/useGeolocation'
@@ -22,7 +22,6 @@ interface FindScreenProps {
 
 const DIGIPIN_CELL_DELTA = 0.00002
 
-// Sub-component: auto-fits map to show both markers
 function MapFitter({ positions }: { positions: [number, number][] }) {
   const map = useMap()
   useEffect(() => {
@@ -33,7 +32,6 @@ function MapFitter({ positions }: { positions: [number, number][] }) {
   return null
 }
 
-// Sub-component: marker using DivIcon
 function DivMarker({ position, html }: { position: [number, number]; html: string }) {
   const map = useMap()
   useEffect(() => {
@@ -44,12 +42,19 @@ function DivMarker({ position, html }: { position: [number, number]; html: strin
   return null
 }
 
+function vibrate(pattern: number | number[]) {
+  try { navigator.vibrate(pattern) } catch { /* not supported */ }
+}
+
 export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenProps) {
   const geo = useGeolocation()
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
+  const hapticTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const distanceRef = useRef(0)
   const [photoModal, setPhotoModal] = useState(false)
   const [copiedDigipin, setCopiedDigipin] = useState(false)
   const [signedPhotoUrl, setSignedPhotoUrl] = useState<string | null>(null)
+  const [hapticsMuted, setHapticsMuted] = useState(false)
 
   const dotColor = colorNameToHex(vehicle.color)
 
@@ -58,7 +63,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
     try { return JSON.parse(activeSpot.emoji_code) } catch { return null }
   }, [activeSpot.emoji_code])
 
-  // Generate signed URL for photo if stored as a path
   useEffect(() => {
     if (!activeSpot.photo_url) return
     if (activeSpot.photo_url.startsWith('http')) {
@@ -77,17 +81,24 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
         if ('wakeLock' in navigator) {
           wakeLockRef.current = await navigator.wakeLock.request('screen')
         }
-      } catch {
-        // Not supported or denied — silent
-      }
+      } catch { /* not supported */ }
     }
     acquireWakeLock()
     return () => { wakeLockRef.current?.release().catch(() => {}); wakeLockRef.current = null }
   }, [])
 
+  // Stop vibration on unmount
+  useEffect(() => {
+    return () => {
+      if (hapticTimerRef.current !== null) clearTimeout(hapticTimerRef.current)
+      vibrate(0)
+    }
+  }, [])
+
   const currentLat = geo.lat ?? activeSpot.lat
   const currentLng = geo.lng ?? activeSpot.lng
   const distance = haversineDistance(currentLat, currentLng, activeSpot.lat, activeSpot.lng)
+  distanceRef.current = distance
 
   const currentDIGIPIN = useMemo(() => {
     if (!geo.lat || !geo.lng) return null
@@ -99,14 +110,56 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
     return isSameZone(currentDIGIPIN, activeSpot.digipin)
   }, [currentDIGIPIN, activeSpot.digipin, distance])
 
+  const hasGps = geo.lat !== null
+
+  // Proximity haptics: self-scheduling pulse that speeds up as distance shrinks.
+  // Interval range: 3000ms at 200m → 400ms at ≤27m. Reads distanceRef so it adapts
+  // without restarting the effect on every GPS update.
   useEffect(() => {
-    if (arrived) {
-      try { navigator.vibrate([200, 100, 200]) } catch { /* not supported */ }
+    if (hapticsMuted || arrived || !hasGps) return
+
+    let cancelled = false
+
+    function pulse() {
+      if (cancelled) return
+      vibrate(60)
+      const next = Math.max(400, Math.min(3000, distanceRef.current * 15))
+      hapticTimerRef.current = setTimeout(pulse, next)
     }
-  }, [arrived])
+
+    const first = Math.max(400, Math.min(3000, distanceRef.current * 15))
+    hapticTimerRef.current = setTimeout(pulse, first)
+
+    return () => {
+      cancelled = true
+      if (hapticTimerRef.current !== null) clearTimeout(hapticTimerRef.current)
+      vibrate(0)
+    }
+  }, [arrived, hapticsMuted, hasGps])
+
+  // Arrived haptics: long vibrate — pause — long vibrate — pause, repeating.
+  useEffect(() => {
+    if (!arrived || hapticsMuted) return
+
+    let cancelled = false
+
+    function arrivedPulse() {
+      if (cancelled) return
+      vibrate([500, 400])
+      // 500ms buzz + 400ms pause = 900ms; next call at 1000ms gives a clean loop
+      hapticTimerRef.current = setTimeout(arrivedPulse, 1000)
+    }
+
+    arrivedPulse()
+
+    return () => {
+      cancelled = true
+      if (hapticTimerRef.current !== null) clearTimeout(hapticTimerRef.current)
+      vibrate(0)
+    }
+  }, [arrived, hapticsMuted])
 
   const mapHeight = Math.round(window.innerHeight * 0.6)
-
   const spotPos: [number, number] = [activeSpot.lat, activeSpot.lng]
   const currentPos: [number, number] = [currentLat, currentLng]
 
@@ -125,8 +178,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
     ? `<div class="spot-marker-wrap"><div class="spot-marker-emojis">${savedEmojis.join(' ')}</div><div class="spot-marker-pin"></div></div>`
     : `<div class="spot-marker-wrap"><div class="spot-marker-pin" style="width:14px;height:14px;"></div></div>`
 
-  const currentMarkerHtml = `<div class="current-location-dot"></div>`
-
   function handleCopyDigipin() {
     if (!activeSpot.digipin) return
     navigator.clipboard.writeText(activeSpot.digipin).then(() => {
@@ -139,11 +190,7 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
     const text = savedEmojis
       ? `find my vehicle ${savedEmojis.join('')} — where-tf-did-i-park.onrender.com`
       : `find my vehicle — where-tf-did-i-park.onrender.com`
-    try {
-      navigator.share({ text })
-    } catch {
-      navigator.clipboard.writeText(text)
-    }
+    try { navigator.share({ text }) } catch { navigator.clipboard.writeText(text) }
   }
 
   if (geo.error && geo.error.includes('denied')) {
@@ -175,7 +222,7 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <MapFitter positions={[spotPos, currentPos]} />
           <DivMarker position={spotPos} html={spotMarkerHtml} />
-          <DivMarker position={currentPos} html={currentMarkerHtml} />
+          <DivMarker position={currentPos} html={`<div class="current-location-dot"></div>`} />
           <Polyline
             positions={[currentPos, spotPos]}
             pathOptions={{ color: '#c8f542', weight: 2, dashArray: '6 6', opacity: 0.8 }}
@@ -196,6 +243,23 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
           <ChevronLeft size={16} />
           <span className="font-mono text-sm">back</span>
         </button>
+
+        {/* Haptic stop/resume pill — always visible once GPS is live */}
+        {hasGps && (
+          <button
+            onClick={() => setHapticsMuted(m => !m)}
+            className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-2 bg-black/60 active:scale-[0.97] transition-transform z-[1001]"
+            style={{ color: hapticsMuted ? '#4a4a4a' : '#c8f542' }}
+          >
+            {hapticsMuted
+              ? <ZapOff size={14} />
+              : <Zap size={14} />
+            }
+            <span className="font-mono text-xs">
+              {hapticsMuted ? 'resume haptics' : 'stop haptics'}
+            </span>
+          </button>
+        )}
 
         {/* GPS loading badge */}
         {geo.loading && (
@@ -234,6 +298,20 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
               >
                 YOU'RE HERE
               </h1>
+              <motion.button
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                onClick={() => setHapticsMuted(m => !m)}
+                className="mt-8 flex items-center gap-2 px-5 py-3 border active:scale-[0.97] transition-transform font-mono text-sm"
+                style={{
+                  borderColor: hapticsMuted ? '#4a4a4a' : '#ffc832',
+                  color: hapticsMuted ? '#4a4a4a' : '#ffc832',
+                }}
+              >
+                {hapticsMuted ? <ZapOff size={15} /> : <Zap size={15} />}
+                {hapticsMuted ? 'resume haptics' : 'stop haptics'}
+              </motion.button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -243,7 +321,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
       <div className="flex-1 bg-surface border-t border-border overflow-y-auto">
         <div className="px-5 py-4 flex flex-col gap-4">
 
-          {/* Emoji code hero */}
           {savedEmojis && (
             <div className="flex flex-col items-center gap-1 py-2">
               <div className="text-5xl tracking-widest">{savedEmojis.join('  ')}</div>
@@ -264,7 +341,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
             </div>
           )}
 
-          {/* Vehicle strip */}
           <div className="flex items-center gap-3 py-2 border-t border-border">
             <span
               className="w-3 h-3 rounded-full flex-shrink-0"
@@ -278,18 +354,14 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
             </span>
           </div>
 
-          {/* Distance */}
           <div className="flex items-center gap-2">
-            <span className="font-mono text-accent2 text-sm">
-              ~{Math.round(distance)}m away
-            </span>
+            <span className="font-mono text-accent2 text-sm">~{Math.round(distance)}m away</span>
             <span className="font-mono text-muted text-xs">•</span>
             <span className="font-mono text-muted text-xs">
               saved with ±{Math.round(activeSpot.accuracy)}m accuracy
             </span>
           </div>
 
-          {/* Orientation hint */}
           {activeSpot.heading !== null && (
             <p className="font-mono text-[#f0f0f0] text-xs">
               you were facing{' '}
@@ -298,18 +370,13 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
             </p>
           )}
 
-          {/* Saved photo */}
           {signedPhotoUrl ? (
             <div>
               <button
                 onClick={() => setPhotoModal(true)}
                 className="w-full overflow-hidden active:opacity-80 transition-opacity"
               >
-                <img
-                  src={signedPhotoUrl}
-                  alt="what it looked like when you parked"
-                  className="w-full h-28 object-cover"
-                />
+                <img src={signedPhotoUrl} alt="what it looked like when you parked" className="w-full h-28 object-cover" />
               </button>
               <p className="font-mono text-muted text-xs mt-1">tap to expand</p>
             </div>
@@ -319,7 +386,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
             </p>
           ) : null}
 
-          {/* Share button */}
           <button
             onClick={handleShare}
             className="flex items-center justify-center gap-2 w-full h-12 border border-border text-muted active:border-accent active:text-accent transition-colors"
