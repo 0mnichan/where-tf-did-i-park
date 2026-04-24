@@ -17,6 +17,9 @@ export interface SavedSpot {
   photo_url: string | null
   saved_at: string
   is_active: boolean
+  digipin: string | null
+  emoji_code: string | null
+  auto_clear_at: string | null
 }
 
 export interface User {

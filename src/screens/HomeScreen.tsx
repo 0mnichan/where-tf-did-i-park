@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { LogOut, X } from 'lucide-react'
+import { LogOut, X, Share2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { User, VehicleProfile, SavedSpot } from '../types'
 import { colorNameToHex } from '../utils/colorMap'
+import { SIGNED_URL_EXPIRY_SECONDS } from '../constants'
 
 interface HomeScreenProps {
   user: User
@@ -25,23 +26,60 @@ function relativeTime(dateStr: string): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
+function hoursUntil(dateStr: string): number {
+  return Math.max(0, Math.round((new Date(dateStr).getTime() - Date.now()) / 3600000))
+}
+
 export default function HomeScreen({ user, vehicle, activeSpot, onSave, onFind, onSpotCleared, onSignOut }: HomeScreenProps) {
   const [clearConfirm, setClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [signOutConfirm, setSignOutConfirm] = useState(false)
   const [photoModal, setPhotoModal] = useState(false)
   const [error, setError] = useState('')
+  const [signedPhotoUrl, setSignedPhotoUrl] = useState<string | null>(null)
+
+  const dotColor = colorNameToHex(vehicle.color)
+
+  const savedEmojis: [string, string, string] | null = useMemo(() => {
+    if (!activeSpot?.emoji_code) return null
+    try { return JSON.parse(activeSpot.emoji_code) } catch { return null }
+  }, [activeSpot?.emoji_code])
+
+  // Generate signed URL for photo
+  useEffect(() => {
+    if (!activeSpot?.photo_url) { setSignedPhotoUrl(null); return }
+    if (activeSpot.photo_url.startsWith('http')) {
+      setSignedPhotoUrl(activeSpot.photo_url)
+      return
+    }
+    supabase.storage
+      .from('parking-photos')
+      .createSignedUrl(activeSpot.photo_url, SIGNED_URL_EXPIRY_SECONDS)
+      .then(({ data }) => { if (data) setSignedPhotoUrl(data.signedUrl) })
+  }, [activeSpot?.photo_url])
+
+  // Auto-clear expired spots on mount
+  useEffect(() => {
+    if (!activeSpot?.auto_clear_at) return
+    const expired = new Date(activeSpot.auto_clear_at).getTime() < Date.now()
+    if (!expired) return
+    supabase
+      .from('saved_spots')
+      .update({ is_active: false })
+      .eq('id', activeSpot.id)
+      .then(() => onSpotCleared())
+  }, [activeSpot?.id, activeSpot?.auto_clear_at, onSpotCleared])
 
   async function handleClearSpot() {
     if (!activeSpot) return
     setClearing(true)
     setError('')
 
-    if (activeSpot.photo_url) {
+    if (activeSpot.photo_url && !activeSpot.photo_url.startsWith('http')) {
+      await supabase.storage.from('parking-photos').remove([activeSpot.photo_url])
+    } else if (activeSpot.photo_url) {
       const path = activeSpot.photo_url.split('/parking-photos/')[1]
-      if (path) {
-        await supabase.storage.from('parking-photos').remove([path])
-      }
+      if (path) await supabase.storage.from('parking-photos').remove([path])
     }
 
     const { error: err } = await supabase
@@ -63,7 +101,16 @@ export default function HomeScreen({ user, vehicle, activeSpot, onSave, onFind, 
     onSignOut()
   }
 
-  const dotColor = colorNameToHex(vehicle.color)
+  function handleShare() {
+    const text = savedEmojis
+      ? `find my vehicle ${savedEmojis.join('')} — where-tf-did-i-park.onrender.com`
+      : `find my vehicle — where-tf-did-i-park.onrender.com`
+    try {
+      navigator.share({ text })
+    } catch {
+      navigator.clipboard.writeText(text)
+    }
+  }
 
   return (
     <motion.div
@@ -106,20 +153,37 @@ export default function HomeScreen({ user, vehicle, activeSpot, onSave, onFind, 
                 <p className="font-mono text-accent text-xs uppercase tracking-widest mb-1">active spot</p>
                 <p className="font-mono text-[#f0f0f0] text-sm">parked {relativeTime(activeSpot.saved_at)}</p>
                 <p className="font-mono text-muted text-xs">±{Math.round(activeSpot.accuracy)}m GPS accuracy</p>
+                {activeSpot.auto_clear_at && (
+                  <p className="font-mono text-muted text-xs mt-0.5">
+                    auto-clears in {hoursUntil(activeSpot.auto_clear_at)}h
+                  </p>
+                )}
               </div>
-              {activeSpot.photo_url && (
+              {signedPhotoUrl && (
                 <button
                   onClick={() => setPhotoModal(true)}
                   className="w-16 h-16 overflow-hidden border border-border flex-shrink-0 active:scale-[0.97] transition-transform"
                 >
                   <img
-                    src={activeSpot.photo_url}
+                    src={signedPhotoUrl}
                     alt="parking spot"
                     className="w-full h-full object-cover"
                   />
                 </button>
               )}
             </div>
+
+            {/* Emoji code + DIGIPIN */}
+            {savedEmojis && (
+              <div className="flex flex-col items-center gap-1 py-3 border-t border-border border-b mb-3">
+                <div className="text-3xl tracking-widest">{savedEmojis.join('  ')}</div>
+                {activeSpot.digipin && (
+                  <p className="font-mono text-accent text-sm tracking-widest mt-1">
+                    {activeSpot.digipin}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center gap-2 mb-4 py-2 border-t border-border">
               <span
@@ -136,32 +200,43 @@ export default function HomeScreen({ user, vehicle, activeSpot, onSave, onFind, 
 
             {error && <p className="font-mono text-danger text-xs mb-3">{error}</p>}
 
-            {clearConfirm ? (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleClearSpot}
-                  disabled={clearing}
-                  className="flex-1 h-10 bg-danger text-[#f0f0f0] text-sm active:scale-[0.97] transition-transform disabled:opacity-60"
-                  style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.06em', fontSize: '16px' }}
-                >
-                  {clearing ? 'CLEARING...' : 'YES CLEAR IT'}
-                </button>
-                <button
-                  onClick={() => setClearConfirm(false)}
-                  className="flex-1 h-10 border border-[#2a2a2a] text-muted text-sm active:scale-[0.97] transition-transform"
-                  style={{ fontFamily: "'Space Mono', monospace" }}
-                >
-                  keep it
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setClearConfirm(true)}
-                className="font-mono text-muted text-xs underline underline-offset-2 active:text-danger transition-colors"
-              >
-                clear spot
-              </button>
-            )}
+            <div className="flex items-center justify-between">
+              {clearConfirm ? (
+                <div className="flex gap-2 flex-1">
+                  <button
+                    onClick={handleClearSpot}
+                    disabled={clearing}
+                    className="flex-1 h-10 bg-danger text-[#f0f0f0] text-sm active:scale-[0.97] transition-transform disabled:opacity-60"
+                    style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.06em', fontSize: '16px' }}
+                  >
+                    {clearing ? 'CLEARING...' : 'YES CLEAR IT'}
+                  </button>
+                  <button
+                    onClick={() => setClearConfirm(false)}
+                    className="flex-1 h-10 border border-[#2a2a2a] text-muted text-sm active:scale-[0.97] transition-transform"
+                    style={{ fontFamily: "'Space Mono', monospace" }}
+                  >
+                    keep it
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setClearConfirm(true)}
+                    className="font-mono text-muted text-xs underline underline-offset-2 active:text-danger transition-colors"
+                  >
+                    clear spot
+                  </button>
+                  <button
+                    onClick={handleShare}
+                    className="flex items-center gap-1 text-muted active:text-accent transition-colors"
+                  >
+                    <Share2 size={14} />
+                    <span className="font-mono text-xs">share</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         )}
 
@@ -192,7 +267,7 @@ export default function HomeScreen({ user, vehicle, activeSpot, onSave, onFind, 
 
       {/* Photo modal */}
       <AnimatePresence>
-        {photoModal && activeSpot?.photo_url && (
+        {photoModal && signedPhotoUrl && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -207,7 +282,7 @@ export default function HomeScreen({ user, vehicle, activeSpot, onSave, onFind, 
               <X size={24} />
             </button>
             <img
-              src={activeSpot.photo_url}
+              src={signedPhotoUrl}
               alt="parking spot"
               className="max-w-full max-h-full object-contain"
               onClick={e => e.stopPropagation()}
