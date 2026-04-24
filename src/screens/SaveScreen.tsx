@@ -1,9 +1,12 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronLeft, Camera, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useGeolocation } from '../hooks/useGeolocation'
 import { useOrientation } from '../hooks/useOrientation'
+import { encodeDIGIPIN } from '../utils/digipin'
+import { digipinToEmojis } from '../utils/emojiCode'
+import { SAVE_SUCCESS_REDIRECT_MS } from '../constants'
 import { User } from '../types'
 import PermissionError from '../components/PermissionError'
 
@@ -33,8 +36,19 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [savedEmojis, setSavedEmojis] = useState<[string, string, string] | null>(null)
   const [error, setError] = useState('')
   const photoStreamRef = useRef<MediaStream | null>(null)
+
+  const liveDigipin = useMemo(() => {
+    if (!geo.lat || !geo.lng) return null
+    try { return encodeDIGIPIN(geo.lat, geo.lng) } catch { return null }
+  }, [geo.lat, geo.lng])
+
+  const liveEmojis = useMemo(() => {
+    if (!liveDigipin) return null
+    try { return digipinToEmojis(liveDigipin) } catch { return null }
+  }, [liveDigipin])
 
   type OrientationEventConstructorWithPermission = typeof DeviceOrientationEvent & {
     requestPermission: () => Promise<PermissionState>
@@ -64,7 +78,6 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
       canvas.width = settings.width ?? 1280
       canvas.height = settings.height ?? 720
 
-      // Wait one frame for camera to stabilize
       await new Promise(r => setTimeout(r, 300))
 
       const video = document.createElement('video')
@@ -102,7 +115,7 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
     setSaving(true)
     setError('')
 
-    let photoUrl: string | null = null
+    let photoPath: string | null = null
 
     if (photoBlob) {
       try {
@@ -112,13 +125,15 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
           .upload(path, photoBlob, { contentType: 'image/jpeg' })
 
         if (!uploadErr && data) {
-          photoUrl = supabase.storage.from('parking-photos').getPublicUrl(data.path).data.publicUrl
+          photoPath = data.path
         }
       } catch {
-        // Silent fail — save spot without photo
         setError('photo upload failed, spot saved anyway')
       }
     }
+
+    const digipin = liveDigipin
+    const emojis = liveEmojis
 
     // Deactivate previous spots
     await supabase
@@ -134,8 +149,10 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
       accuracy: geo.accuracy,
       heading: orientation.smoothedHeading,
       pitch: orientation.pitch,
-      photo_url: photoUrl,
+      photo_url: photoPath,
       is_active: true,
+      digipin,
+      emoji_code: emojis ? JSON.stringify(emojis) : null,
     })
 
     setSaving(false)
@@ -145,10 +162,11 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
       return
     }
 
+    setSavedEmojis(emojis)
     setSaved(true)
     setTimeout(() => {
       onSaved()
-    }, 1500)
+    }, SAVE_SUCCESS_REDIRECT_MS)
   }
 
   if (geo.error && geo.error.includes('denied')) {
@@ -219,8 +237,6 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
                 >
                   {accLevel === 'good'
                     ? `GPS locked (±${Math.round(geo.accuracy!)}m)`
-                    : accLevel === 'ok'
-                    ? `GPS is being dramatic (±${Math.round(geo.accuracy!)}m) — try moving to open sky`
                     : `GPS is being dramatic (±${Math.round(geo.accuracy!)}m) — try moving to open sky`}
                 </span>
               </div>
@@ -237,6 +253,20 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
             </>
           )}
         </div>
+
+        {/* Live DIGIPIN + emoji preview */}
+        {liveDigipin && liveEmojis && (
+          <div className="bg-surface border border-accent/30 p-4 flex flex-col items-center gap-2">
+            <p className="font-mono text-muted text-xs uppercase tracking-widest">your spot</p>
+            <div className="text-4xl tracking-widest">{liveEmojis.join('  ')}</div>
+            <p
+              className="text-xl text-accent tracking-widest"
+              style={{ fontFamily: "'Space Mono', monospace" }}
+            >
+              {liveDigipin}
+            </p>
+          </div>
+        )}
 
         {/* Photo section */}
         <div className="bg-surface border border-border p-4">
@@ -286,21 +316,47 @@ export default function SaveScreen({ user, onBack, onSaved }: SaveScreenProps) {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="fixed inset-0 bg-bg flex items-center justify-center z-50"
+            className="fixed inset-0 bg-bg flex flex-col items-center justify-center z-50 gap-6"
           >
-            <motion.div
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            >
-              <h1
-                className="text-[80px] text-accent text-center leading-none"
-                style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.05em' }}
+            {savedEmojis ? (
+              <>
+                <motion.div
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+                  className="text-6xl tracking-widest"
+                >
+                  {savedEmojis.join('  ')}
+                </motion.div>
+                <motion.div
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 18, delay: 0.1 }}
+                >
+                  <h1
+                    className="text-[72px] text-accent text-center leading-none"
+                    style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.05em' }}
+                  >
+                    LOCKED.
+                  </h1>
+                  <div className="h-1 w-full bg-accent mt-2" />
+                </motion.div>
+              </>
+            ) : (
+              <motion.div
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 20 }}
               >
-                LOCKED.
-              </h1>
-              <div className="h-1 w-full bg-accent mt-2" />
-            </motion.div>
+                <h1
+                  className="text-[80px] text-accent text-center leading-none"
+                  style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.05em' }}
+                >
+                  LOCKED.
+                </h1>
+                <div className="h-1 w-full bg-accent mt-2" />
+              </motion.div>
+            )}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: [0, 0.3, 0] }}

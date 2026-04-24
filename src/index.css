@@ -80,3 +80,55 @@ button {
 .animate-pulse-ring {
   animation: pulse-ring 1.2s ease-in-out infinite;
 }
+
+/* Leaflet dark tile inversion */
+.leaflet-tile {
+  filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(1.1);
+}
+
+.leaflet-container {
+  background: #080808;
+}
+
+/* Pulsing current-location dot for Leaflet map */
+.current-location-dot {
+  width: 18px;
+  height: 18px;
+  background: #00d4ff;
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.4);
+  animation: pulse-location 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-location {
+  0% { box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.4); }
+  70% { box-shadow: 0 0 0 12px rgba(0, 212, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 212, 255, 0); }
+}
+
+/* Spot marker emoji label above pin */
+.spot-marker-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.spot-marker-emojis {
+  background: rgba(0,0,0,0.75);
+  border: 1px solid #c8f542;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 18px;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.spot-marker-pin {
+  width: 12px;
+  height: 12px;
+  background: #c8f542;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #c8f542;
+}
