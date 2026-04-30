@@ -8,8 +8,7 @@ import { useOrientation } from '../hooks/useOrientation'
 import { haversineDistance, calculateBearing } from '../utils/geo'
 import { headingToCardinal } from '../utils/geo'
 import { colorNameToHex } from '../utils/colorMap'
-import { encodeDIGIPIN, decodeDIGIPIN } from '../utils/digipin'
-import { isSameZone } from '../utils/emojiCode'
+import { decodeDIGIPIN } from '../utils/digipin'
 import { supabase } from '../lib/supabase'
 import { SIGNED_URL_EXPIRY_SECONDS } from '../constants'
 import { VehicleProfile, SavedSpot } from '../types'
@@ -159,7 +158,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
   const [copiedDigipin, setCopiedDigipin] = useState(false)
   const [signedPhotoUrl, setSignedPhotoUrl] = useState<string | null>(null)
   const [hapticsMuted, setHapticsMuted] = useState(false)
-  const [arrivedDismissed, setArrivedDismissed] = useState(false)
 
   const dotColor = colorNameToHex(vehicle.color)
 
@@ -205,24 +203,7 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
   const distance = haversineDistance(currentLat, currentLng, activeSpot.lat, activeSpot.lng)
   distanceRef.current = distance
 
-  const currentDIGIPIN = useMemo(() => {
-    if (!geo.lat || !geo.lng) return null
-    try { return encodeDIGIPIN(geo.lat, geo.lng) } catch { return null }
-  }, [geo.lat, geo.lng])
-
-  const arrived = useMemo(() => {
-    // Never fire until we have a real GPS fix — the fallback coords equal the
-    // saved spot, which would make the DIGIPIN match instantly.
-    if (!geo.lat || !geo.lng) return false
-    if (!currentDIGIPIN || !activeSpot.digipin) return distance < 10
-    return isSameZone(currentDIGIPIN, activeSpot.digipin)
-  }, [geo.lat, geo.lng, currentDIGIPIN, activeSpot.digipin, distance])
-
-  // Re-show the overlay each time arrived flips to true (e.g. user walked away
-  // and came back)
-  useEffect(() => {
-    if (arrived) setArrivedDismissed(false)
-  }, [arrived])
+  const arrived = geo.lat !== null && distance < 4
 
   const hasGps = geo.lat !== null
 
@@ -408,61 +389,6 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
           <LocateFixed size={18} className="text-[#f0f0f0]" />
         </button>
 
-        {/* YOU'RE HERE overlay */}
-        <AnimatePresence>
-          {arrived && !arrivedDismissed && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              className="absolute inset-0 flex flex-col items-center justify-center z-[1000] bg-black/50"
-            >
-              {/* Close — dismiss overlay, keep haptics running */}
-              <button
-                onClick={() => setArrivedDismissed(true)}
-                className="absolute top-3 right-3 p-2 text-[#f0f0f0]/60 active:text-[#f0f0f0] transition-colors"
-                aria-label="Dismiss"
-              >
-                <X size={20} />
-              </button>
-
-              {savedEmojis && (
-                <motion.div
-                  animate={{ scale: [1, 1.15, 1] }}
-                  transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-                  className="text-5xl mb-4"
-                >
-                  {savedEmojis.join('  ')}
-                </motion.div>
-              )}
-              <h1
-                className="text-[64px] leading-none"
-                style={{
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  color: '#ffc832',
-                  textShadow: '0 0 24px #ffc832',
-                  letterSpacing: '0.05em',
-                }}
-              >
-                YOU'RE HERE
-              </h1>
-              <motion.button
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4 }}
-                onClick={() => setHapticsMuted(m => !m)}
-                className="mt-8 flex items-center gap-2 px-5 py-3 border active:scale-[0.97] transition-transform font-mono text-sm"
-                style={{
-                  borderColor: hapticsMuted ? '#4a4a4a' : '#ffc832',
-                  color: hapticsMuted ? '#4a4a4a' : '#ffc832',
-                }}
-              >
-                {hapticsMuted ? <ZapOff size={15} /> : <Zap size={15} />}
-                {hapticsMuted ? 'resume haptics' : 'stop haptics'}
-              </motion.button>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
       {/* Info panel */}
@@ -503,11 +429,22 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="font-mono text-accent2 text-sm">~{Math.round(distance)}m away</span>
-            <span className="font-mono text-muted text-xs">•</span>
-            <span className="font-mono text-muted text-xs">
-              saved with ±{Math.round(activeSpot.accuracy)}m accuracy
-            </span>
+            {arrived ? (
+              <span
+                className="tracking-widest"
+                style={{ fontFamily: "'Bebas Neue', sans-serif", color: '#ffc832', fontSize: '28px' }}
+              >
+                YOU'RE HERE
+              </span>
+            ) : (
+              <>
+                <span className="font-mono text-accent2 text-sm">~{Math.round(distance)}m away</span>
+                <span className="font-mono text-muted text-xs">•</span>
+                <span className="font-mono text-muted text-xs">
+                  saved with ±{Math.round(activeSpot.accuracy)}m accuracy
+                </span>
+              </>
+            )}
           </div>
 
           {activeSpot.heading !== null && (
