@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, X, Share2, Copy, Zap, ZapOff } from 'lucide-react'
+import { ChevronLeft, X, Share2, Copy, Zap, ZapOff, LocateFixed } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Rectangle, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { useGeolocation } from '../hooks/useGeolocation'
@@ -23,13 +23,27 @@ interface FindScreenProps {
 
 const DIGIPIN_CELL_DELTA = 0.00002
 
+// Fits map to both markers exactly once — on the first real GPS fix.
+// After that the user can pan/zoom freely.
 function MapFitter({ positions }: { positions: [number, number][] }) {
   const map = useMap()
+  const fitted = useRef(false)
   useEffect(() => {
-    if (positions.length < 2) return
-    const bounds = L.latLngBounds(positions.map(p => L.latLng(p[0], p[1])))
-    map.fitBounds(bounds, { padding: [60, 60] })
+    if (fitted.current || positions.length < 2) return
+    const [p1, p2] = positions
+    // Identical points = GPS not yet available; wait for a real fix
+    if (p1[0] === p2[0] && p1[1] === p2[1]) return
+    fitted.current = true
+    map.fitBounds(L.latLngBounds(positions.map(p => L.latLng(p[0], p[1]))), { padding: [60, 60] })
   }, [map, positions])
+  return null
+}
+
+// Captures the Leaflet map instance into a ref so the parent can call
+// fitBounds imperatively (recenter button).
+function MapRefCapture({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }) {
+  const map = useMap()
+  useEffect(() => { mapRef.current = map }, [map, mapRef])
   return null
 }
 
@@ -139,11 +153,13 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
   const orientation = useOrientation()
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
   const hapticTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mapRef = useRef<L.Map | null>(null)
   const distanceRef = useRef(0)
   const [photoModal, setPhotoModal] = useState(false)
   const [copiedDigipin, setCopiedDigipin] = useState(false)
   const [signedPhotoUrl, setSignedPhotoUrl] = useState<string | null>(null)
   const [hapticsMuted, setHapticsMuted] = useState(false)
+  const [arrivedDismissed, setArrivedDismissed] = useState(false)
 
   const dotColor = colorNameToHex(vehicle.color)
 
@@ -195,11 +211,28 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
   }, [geo.lat, geo.lng])
 
   const arrived = useMemo(() => {
+    // Never fire until we have a real GPS fix — the fallback coords equal the
+    // saved spot, which would make the DIGIPIN match instantly.
+    if (!geo.lat || !geo.lng) return false
     if (!currentDIGIPIN || !activeSpot.digipin) return distance < 10
     return isSameZone(currentDIGIPIN, activeSpot.digipin)
-  }, [currentDIGIPIN, activeSpot.digipin, distance])
+  }, [geo.lat, geo.lng, currentDIGIPIN, activeSpot.digipin, distance])
+
+  // Re-show the overlay each time arrived flips to true (e.g. user walked away
+  // and came back)
+  useEffect(() => {
+    if (arrived) setArrivedDismissed(false)
+  }, [arrived])
 
   const hasGps = geo.lat !== null
+
+  function recenterMap() {
+    if (!mapRef.current) return
+    mapRef.current.fitBounds(
+      L.latLngBounds([L.latLng(spotPos[0], spotPos[1]), L.latLng(currentPos[0], currentPos[1])]),
+      { padding: [60, 60] }
+    )
+  }
 
   // Proximity haptics: self-scheduling pulse that speeds up as distance shrinks.
   // Interval range: 3000ms at 200m → 400ms at ≤27m. Reads distanceRef so it adapts
@@ -311,6 +344,7 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
           attributionControl={false}
         >
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <MapRefCapture mapRef={mapRef} />
           <MapFitter positions={[spotPos, currentPos]} />
           <DivMarker position={spotPos} html={spotMarkerHtml} />
           <DivMarker position={currentPos} html={`<div class="current-location-dot"></div>`} />
@@ -359,21 +393,39 @@ export default function FindScreen({ vehicle, activeSpot, onBack }: FindScreenPr
 
         {/* GPS loading badge */}
         {geo.loading && (
-          <div className="absolute bottom-3 left-3 right-3 bg-black/70 px-3 py-2 flex items-center gap-2 z-[1000]">
+          <div className="absolute bottom-3 left-3 right-16 bg-black/70 px-3 py-2 flex items-center gap-2 z-[1000]">
             <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span className="font-mono text-[#f0f0f0] text-xs">acquiring GPS...</span>
           </div>
         )}
 
+        {/* Recenter — fits both markers back in view */}
+        <button
+          onClick={recenterMap}
+          className="absolute bottom-3 right-3 w-10 h-10 bg-black/70 border border-white/15 flex items-center justify-center z-[1001] active:scale-[0.97] transition-transform"
+          aria-label="Recenter map"
+        >
+          <LocateFixed size={18} className="text-[#f0f0f0]" />
+        </button>
+
         {/* YOU'RE HERE overlay */}
         <AnimatePresence>
-          {arrived && (
+          {arrived && !arrivedDismissed && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.8 }}
               className="absolute inset-0 flex flex-col items-center justify-center z-[1000] bg-black/50"
             >
+              {/* Close — dismiss overlay, keep haptics running */}
+              <button
+                onClick={() => setArrivedDismissed(true)}
+                className="absolute top-3 right-3 p-2 text-[#f0f0f0]/60 active:text-[#f0f0f0] transition-colors"
+                aria-label="Dismiss"
+              >
+                <X size={20} />
+              </button>
+
               {savedEmojis && (
                 <motion.div
                   animate={{ scale: [1, 1.15, 1] }}
